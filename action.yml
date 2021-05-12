@@ -18,7 +18,7 @@ inputs:
     description: 'helm version'
 runs:
   using: 'docker'
-  image: 'docker://stefanprodan/kube-tools:v1.5.0'
+  image: 'docker://public.ecr.aws/i1i0w6p5/kube-tools:v1.5.0'
   args:
     - ${{ inputs.command }}
     - ${{ inputs.kubectl }}
