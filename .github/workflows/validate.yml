@@ -1,0 +1,71 @@
+name: Validate YAML
+on:
+  pull_request:
+    branches:
+    - master
+jobs:
+  check-go:
+    name: Run validate and test
+    runs-on: [yaml-validator-inc]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 2
+    - name: Check out kubetools action
+      uses: actions/checkout@v2
+      with:
+        repository: freshactions/kube-tools
+        ref: v1
+        token: ${{ secrets.GITHUB_TOKEN }}
+        path: ./.github/actions/kube-tools
+    - name: Get changed files
+      id: changed-files
+      run: |
+        git diff --name-only HEAD^1 HEAD
+        result=$(git diff --name-only HEAD^1 HEAD)
+        joined_files=""
+        for file in $result
+        do
+            if [[ "$file" == deploy* ]]; then
+              # Added below logic based on our folder structure, so it will run for only specific tenants
+              # Get the path of first 3 tree like deploy/haystack/<tenant_name or base> 
+              path=$(echo "$file" | cut -d'/' -f1-3)
+              # Find substr if the path already exists in the joined_files
+              if [[ "$joined_files" != *"$path"* ]]; then
+                joined_files+="$path "
+              fi            
+            fi
+        done
+        echo "::set-output name=changed_files::$joined_files"
+        joined_files=$(echo $joined_files)
+    - name: Validate
+      id: kustomize
+      uses: ./.github/actions/kube-tools
+      with:
+        kustomize: '3.5.3'
+        command: |
+          echo "machine github.com login cautomation-fw password ${{ secrets.PAT_TOKEN }}" > ~/.netrc
+          git config --global url."https://github.com/".insteadOf "git://github.com/"
+
+          wget -c https://github.com/yannh/kubeconform/releases/download/v0.6.3/kubeconform-linux-amd64.tar.gz -O - | tar -xz
+          cp kubeconform /usr/local/bin
+
+          echo "================ Validating yaml ================"
+
+          if [[ "${{ steps.changed-files.outputs.changed_files }}" != "" ]]; then
+            for d in $(find ${{ steps.changed-files.outputs.changed_files }} -iname 'kustomization.yaml'); do
+              echo -n "$d: "
+              doc=$(kustomize build --load_restrictor none $(dirname $d) 2>&1)
+              if [ $? -ne 0 ]; then echo "failed: $doc"; exit 1; fi
+              out=$(echo "$doc" | kubeconform -strict -ignore-missing-schemas 2>&1)
+              echo "$doc" > "$(dirname $d)/rendered.yaml"
+              files="$files $(dirname $d)/rendered.yaml"
+              if [ $? -ne 0 ]; then echo "failed: $out"; exit 1; else echo "valid"; fi
+            done
+            echo "::set-output name=manifest_files::${files}"
+          fi
+    # - name: Policy Test
+    #   uses: freshactions/conftest-action@master
+    #   with:
+    #     files: ${{ steps.kustomize.outputs.manifest_files }}
